@@ -2,6 +2,7 @@
 // radar scope with bandit blips, combat toasts, day/night tint, kill feed.
 import { CFG } from './config.js';
 import { project } from './camera.js';
+import { dayFactors } from './render.js';
 
 function tape(ctx, x, y, w, h, val, unit, color = '#eaf2f8') {
   ctx.save();
@@ -90,19 +91,42 @@ export function drawHUD(ctx, p, spec, mission, cam, W, H, tNow, foes = [], toast
   const hdg = ((p.heading * 180 / Math.PI) % 360 + 360) % 360;
   tape(ctx, 226, 16, 92, 26, hdg, 'HDG');
   tape(ctx, 18, 48, 92, 26, p.throttle * 100, 'THR');
-  // heading ribbon
+  // heading ribbon → real compass tape with tick marks and lubber line
   ctx.save();
   ctx.strokeStyle = 'rgba(230,240,250,0.6)';
-  ctx.beginPath(); ctx.roundRect(W / 2 - 150, 14, 300, 22, 4);
+  ctx.beginPath(); ctx.roundRect(W / 2 - 160, 14, 320, 26, 4);
   ctx.fillStyle = 'rgba(10,20,30,0.5)'; ctx.fill(); ctx.stroke();
-  ctx.fillStyle = '#eaf2f8'; ctx.font = '10px ui-monospace, monospace';
-  for (let d = -60; d <= 60; d += 15) {
-    let h = Math.round((hdg + d) / 15) * 15 - hdg;
-    const x = W / 2 + (h / 60) * 150;
-    const hv = ((Math.round((hdg + d) / 15) * 15) % 360 + 360) % 360;
-    ctx.fillText(hv === 0 ? 'N' : hv === 90 ? 'E' : hv === 180 ? 'S' : hv === 270 ? 'W' : String(hv / 10 | 0), x - 4, 28);
+  ctx.font = '10px ui-monospace, monospace';
+  for (let d = -70; d <= 70; d += 10) {
+    const hv = ((Math.round((hdg + d) / 10) * 10) % 360 + 360) % 360;
+    const x = W / 2 + (((Math.round((hdg + d) / 10) * 10) - hdg) / 70) * 160;
+    const major = hv % 30 === 0;
+    ctx.strokeStyle = major ? 'rgba(230,240,250,0.85)' : 'rgba(230,240,250,0.4)';
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(x, 16); ctx.lineTo(x, major ? 24 : 21); ctx.stroke();
+    if (major) {
+      ctx.fillStyle = '#eaf2f8';
+      ctx.fillText(hv === 0 ? 'N' : hv === 90 ? 'E' : hv === 180 ? 'S' : hv === 270 ? 'W' : String(hv / 10 | 0), x - (hv < 100 && hv % 90 !== 0 ? 3 : 5), 35);
+    }
   }
+  // lubber line
+  ctx.strokeStyle = '#ffd257'; ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.moveTo(W / 2, 12); ctx.lineTo(W / 2, 20); ctx.stroke();
+  ctx.fillStyle = '#ffd257'; ctx.font = 'bold 11px ui-monospace, monospace';
+  ctx.fillText(String(Math.round(hdg)).padStart(3, '0'), W / 2 + 8, 20);
   ctx.restore();
+  // G / AoA / Mach readout cluster, center-left of ladder
+  ctx.fillStyle = 'rgba(10,20,30,0.5)';
+  ctx.beginPath(); ctx.roundRect(W / 2 - 262, 52, 96, 44, 4); ctx.fill();
+  ctx.strokeStyle = 'rgba(230,240,250,0.5)'; ctx.stroke();
+  ctx.font = 'bold 12px ui-monospace, monospace';
+  ctx.fillStyle = p.g > CFG.HARD_G ? '#ff5a5a' : '#eaf2f8';
+  ctx.fillText(`${p.g.toFixed(1)} G`, W / 2 - 250, 68);
+  ctx.font = '10px ui-monospace, monospace';
+  const aoa = (p.pitch * 57.3 * 0.6).toFixed(1);
+  ctx.fillStyle = 'rgba(234,242,248,0.85)';
+  ctx.fillText(`AOA ${aoa}°`, W / 2 - 250, 82);
+  ctx.fillText(`M ${(p.speed / 340).toFixed(2)}`, W / 2 - 250, 93);
   // mission readout
   if (mission) {
     ctx.fillStyle = 'rgba(10,20,30,0.55)';
@@ -138,8 +162,55 @@ export function drawHUD(ctx, p, spec, mission, cam, W, H, tNow, foes = [], toast
   lamp(ctx, W - 110, H - 52, 'ENGINE', p.fuel <= 0, '#ff5a5a');
   lamp(ctx, W - 200, H - 78, 'OVER-G', p.g > CFG.HARD_G, '#ffcf5a');
   lamp(ctx, W - 200, H - 52, 'FLARES', p.flaresLeft > 0, '#78d8a0');
-  // radar scope
+  // radar scope (blips + 2 range rings)
   radar(ctx, W - 76, H - 130, 52, p, foes, p.heading);
+  // corner panel: throttle / fuel / airframe vertical bars
+  const bars = [
+    { label: 'THR', v: p.throttle, c: '#ffd257' },
+    { label: 'FUEL', v: p.fuel / 100, c: p.fuel < CFG.FUEL_WARN * 100 ? '#ff5a5a' : '#7be08a' },
+    { label: 'HULL', v: 1 - p.damage / CFG.MAX_DAMAGE, c: p.damage > 60 ? '#ff5a5a' : p.damage > 25 ? '#ffcf5a' : '#7be08a' },
+  ];
+  const bx = W - 330, bh = 84;
+  ctx.fillStyle = 'rgba(10,20,30,0.5)';
+  ctx.beginPath(); ctx.roundRect(bx - 10, H - bh - 20, 96, bh + 14, 5); ctx.fill();
+  ctx.strokeStyle = 'rgba(230,240,250,0.45)'; ctx.stroke();
+  bars.forEach((b, i) => {
+    const x = bx + i * 30 + 4, yTop = H - bh - 8;
+    ctx.strokeStyle = 'rgba(230,240,250,0.55)';
+    ctx.strokeRect(x, yTop, 14, bh - 20);
+    const fh = Math.max(0, Math.min(1, b.v)) * (bh - 22);
+    ctx.fillStyle = b.c;
+    ctx.fillRect(x + 2, yTop + (bh - 20) - fh, 10, fh);
+    // 25% tick
+    ctx.strokeStyle = 'rgba(255,255,255,0.25)';
+    ctx.beginPath(); ctx.moveTo(x, yTop + (bh - 20) * 0.75); ctx.lineTo(x + 14, yTop + (bh - 20) * 0.75); ctx.stroke();
+    ctx.fillStyle = 'rgba(230,240,250,0.85)'; ctx.font = '8px ui-monospace, monospace';
+    ctx.fillText(b.label, x - 1, H - 10);
+  });
+  // waypoint gate marker: projected box around the next ring + distance
+  if (mission && mission.rings.length && mission.idx < mission.rings.length) {
+    const r = mission.rings[mission.idx];
+    const pr = project(cam, W, H, r.x, r.y, r.z);
+    if (pr && pr.x > -60 && pr.x < W + 60 && pr.y > -40 && pr.y < H + 40) {
+      const g = Math.max(14, r.r * pr.scale * 0.55);
+      ctx.strokeStyle = 'rgba(255,210,87,0.9)'; ctx.lineWidth = 1.5;
+      ctx.setLineDash([5, 4]);
+      ctx.strokeRect(pr.x - g, pr.y - g, g * 2, g * 2);
+      ctx.setLineDash([]);
+      const d3 = Math.hypot(r.x - p.pos.x, r.y - p.pos.y, r.z - p.pos.z);
+      ctx.fillStyle = '#ffe9a8'; ctx.font = 'bold 11px ui-monospace, monospace';
+      ctx.fillText(`G-${String(mission.idx + 1).padStart(2, '0')} ${Math.round(d3)}m`, pr.x + g + 5, pr.y - g + 2);
+      // off-screen pointer arrow toward the gate
+      if (pr.x < 40 || pr.x > W - 40 || pr.y < 40 || pr.y > H - 40) {
+        const ang = Math.atan2(pr.y - H / 2, pr.x - W / 2);
+        const ax = W / 2 + Math.cos(ang) * (W / 2 - 46), ay = H / 2 + Math.sin(ang) * (H / 2 - 46);
+        ctx.save(); ctx.translate(ax, ay); ctx.rotate(ang);
+        ctx.fillStyle = 'rgba(255,210,87,0.9)';
+        ctx.beginPath(); ctx.moveTo(12, 0); ctx.lineTo(-6, 7); ctx.lineTo(-6, -7); ctx.closePath(); ctx.fill();
+        ctx.restore();
+      }
+    }
+  }
   // combat toasts / kill feed
   let ty = 84;
   for (const t of toasts) {
@@ -167,9 +238,9 @@ export function drawHUD(ctx, p, spec, mission, cam, W, H, tNow, foes = [], toast
     ctx.fillRect(0, 0, W, H);
   }
   // night vignette
-  const f = dayTime;
-  if (f > 0.7) {
-    const nv = Math.min(0.28, (f - 0.7) * 0.8);
+  const nightF = dayFactors(dayTime).night;
+  if (nightF > 0.2) {
+    const nv = Math.min(0.28, nightF * 0.8);
     const g = ctx.createRadialGradient(W / 2, H / 2, H * 0.3, W / 2, H / 2, H * 0.9);
     g.addColorStop(0, 'rgba(4,8,16,0)');
     g.addColorStop(1, `rgba(4,8,16,${nv})`);

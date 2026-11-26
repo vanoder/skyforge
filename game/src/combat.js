@@ -36,6 +36,17 @@ export function stepFoe(f, p, terrain, dt, tNow, shots) {
     else if (d <= 400) f.mode = Math.random() < 0.75 ? 'attack' : 'evade';
     else if (d < 700) f.mode = Math.random() < 0.4 ? 'evade' : 'pursue';
     else f.mode = 'patrol';
+    // merge: head-on pass at medium range with closure — commit straight through
+    if (d > 700 && d < 1600) {
+      const closing = (f.speed + p.speed) > 190;
+      const headOn = Math.abs(((Math.atan2(p.pos.x - f.pos.x, p.pos.z - f.pos.z) - f.heading + Math.PI * 3) % (Math.PI * 2)) - Math.PI) < 0.5;
+      if (closing && headOn && Math.random() < 0.5 * f.skill) { f.mode = 'merge'; f.mergeT = 3 + Math.random() * 2; }
+    }
+  }
+  // merge countdown → break once past the merge point
+  if (f.mode === 'merge') {
+    f.mergeT -= dt;
+    if (d < 260 || f.mergeT <= 0) f.mode = Math.random() < 0.6 ? 'break' : 'pursue';
   }
   // interrupted: incoming missile forces evade
   if (d < 1800 && f.mode !== 'evade' && Math.random() < 0.3 * dt * (1 + f.skill)) f.jink();
@@ -54,6 +65,18 @@ export function stepFoe(f, p, terrain, dt, tNow, shots) {
       f.fireCd = 0.5 / f.skill + Math.random() * 0.5;
       shots.push(makeBullet(f.pos, p.pos, false, f));
     }
+  } else if (f.mode === 'merge') {
+    // commit straight at the player, full burner, no jinking — the pass
+    targetHeading = Math.atan2(p.pos.x - f.pos.x, p.pos.z - f.pos.z);
+    targetPitch = Math.atan2(p.pos.y - f.pos.y, Math.hypot(p.pos.x - f.pos.x, p.pos.z - f.pos.z));
+    targetSpeed = 155;
+  } else if (f.mode === 'break') {
+    // hard banking turn away, energy-scrubbing break turn
+    targetHeading = f.heading + f.jinkDir * 1.1;
+    targetPitch = -0.1;
+    targetSpeed = 150;
+    if (f.jinkT <= 0) { f.jinkDir *= -1; f.jinkT = 1.2; }
+    if (f.modeT > 3.5) f.mode = 'pursue';
   } else if (f.mode === 'evade') {
     targetHeading = f.heading + f.jinkDir * 1.4;
     targetPitch = 0.35 * f.jinkDir;

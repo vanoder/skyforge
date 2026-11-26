@@ -4,31 +4,88 @@ import { CFG } from './config.js';
 import { project } from './camera.js';
 
 const SKY_TOP = '#0b2a4d', SKY_MID = '#3f83c4', SKY_HOR = '#cfdfe9';
+// Golden-hour palette: warm orange/pink horizon band, deep blue-violet zenith.
+const GH_ZEN = '#2b2a6e', GH_MID = '#7a5aa8', GH_HOR = '#ff9a4d', GH_PINK = '#ff7a9e';
 
 // Day/night tinting: t in 0..1 (0=dawn, .25=noon, .5=dusk, .75=night)
 export function dayFactors(t) {
   const light = Math.max(-1, Math.min(1, Math.sin(t * Math.PI * 2)));
   const day = Math.max(0, light);
   const dusk = Math.max(0, 1 - Math.abs(light) * 2.6);
-  return { light, day, dusk, night: Math.max(0, -light) };
+  // golden-hour band also around dawn (t near 0/1): dawn peaks as light crosses 0 going positive
+  const dawn = Math.max(0, 1 - Math.abs(t < 0.5 ? t / 0.5 : (1 - t) / 0.5 - 1) * 2.2) * (1 - Math.max(0, -light) * 0.3);
+  // golden hour: sun near the horizon but still up — warm band on lit sky/terrain
+  const golden = Math.max(0, 1 - Math.abs(light) / 0.5) * (1 - Math.max(0, -light) * 0.6);
+  return { light, day, dusk, dawn, golden, night: Math.max(0, -light) };
 }
+
+// Layered procedural soft-ellipse clouds, 3 parallax bands, lit by sun angle (golden hour = warm bellies).
+export function drawClouds(ctx, W, H, dayTime = 0.25, cam, tNow = 0) {
+  const f = dayFactors(dayTime);
+  const gh = Math.max(f.golden, f.dusk * 0.7);
+  const horizon = H * 0.42;
+  const drift = tNow * 6;
+  // per-layer: count, y-band fraction of sky, scale, speed, alpha
+  const layers = [
+    { n: 9,  y0: 0.05, y1: 0.30, s: 1.7, sp: 0.35, a: 0.30 },
+    { n: 11, y0: 0.16, y1: 0.38, s: 1.15, sp: 0.7,  a: 0.38 },
+    { n: 8,  y0: 0.30, y1: 0.44, s: 0.7,  sp: 1.3,  a: 0.45 },
+  ];
+  for (let li = 0; li < layers.length; li++) {
+    const L = layers[li];
+    for (let i = 0; i < L.n; i++) {
+      // deterministic placement from indices (no per-frame randomness)
+      const hx = ((i * 9301 + li * 49297 + Math.floor(drift * L.sp * 0.2)) % 233280) / 233280;
+      const hy = ((i * 4177 + li * 104729) % 65536) / 65536;
+      const baseX = hx * (W + 400) - 200;
+      const x = ((baseX - drift * L.sp * 30) % (W + 400) + W + 400) % (W + 400) - 200;
+      const y = horizon - (y0y(L, hy)) * horizon;
+      const rr = (26 + hy * 40) * L.s * (W / 960);
+      // sun-lit coloring: lit edge faces the sun (right side at golden hour)
+      const litW = 0.45 + f.day * 0.45;
+      const topC = gh > 0.15 ? `rgba(${255},${(200 - gh * 40) | 0},${(170 - gh * 60) | 0},${L.a})` : `rgba(${(245 * litW + 40) | 0},${(248 * litW + 45) | 0},255,${L.a})`;
+      const botC = gh > 0.15 ? `rgba(${(180 + gh * 60) | 0},${(90 + gh * 40) | 0},${70},${L.a * 0.8})` : `rgba(${(150 * litW + 40) | 0},${(160 * litW + 50) | 0},${(185 * litW + 60) | 0},${L.a * 0.8})`;
+      const cg = ctx.createRadialGradient(x - rr * 0.2, y - rr * 0.28, rr * 0.12, x, y, rr);
+      cg.addColorStop(0, topC);
+      cg.addColorStop(1, botC);
+      ctx.fillStyle = cg;
+      // soft mass: 4 overlapping ellipses
+      for (let e = 0; e < 4; e++) {
+        const ex = x + (e - 1.5) * rr * 0.42 + Math.sin(i * 3 + e) * rr * 0.1;
+        const ey = y + Math.abs(e - 1.5) * rr * 0.14;
+        ctx.beginPath();
+        ctx.ellipse(ex, ey, rr * (e === 1 || e === 2 ? 0.62 : 0.45), rr * 0.3, 0, 0, 7);
+        ctx.fill();
+      }
+    }
+  }
+}
+function y0y(L, hy) { return L.y0 + (L.y1 - L.y0) * hy; }
 
 export function drawSky(ctx, cam, W, H, dayTime = 0.25) {
   const f = dayFactors(dayTime);
   const top = mixHex(SKY_TOP, '#05070f', f.night * 0.95);
   const mid = mixHex(SKY_MID, '#0b1426', f.night * 0.9);
   const hor = mixHex(SKY_HOR, '#1b2436', f.night * 0.85);
+  // golden-hour blending: zenith deepens to blue-violet, horizon goes warm orange/pink
+  const gh = Math.max(f.dusk * 0.6, f.golden);
+  let topC = mixHex(top, GH_ZEN, gh * 0.5);
+  let midC = mixHex(mid, GH_MID, gh * 0.45);
+  let horC = mixHex(hor, GH_HOR, gh * 0.95);
   const g = ctx.createLinearGradient(0, 0, 0, H);
-  g.addColorStop(0, top);
-  g.addColorStop(0.55, mid);
-  g.addColorStop(0.8, mixHex(hor, '#e8a15a', f.dusk * 0.55));
+  g.addColorStop(0, topC);
+  g.addColorStop(0.45, midC);
+  g.addColorStop(0.72, mixHex(midC, horC, 0.55));
+  g.addColorStop(0.82, horC);
+  // pink rim just above the horizon at golden hour
+  if (gh > 0.02) g.addColorStop(0.9, mixHex(horC, GH_PINK, gh * 0.7));
   ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
 
   // sun / moon
-  const sunX = W * 0.72, sunY = H * (0.12 + (1 - f.day) * 0.1);
+  const sunX = W * 0.72, sunY = H * (0.12 + (1 - f.day) * 0.1 + gh * 0.52);
   if (f.night < 0.75) {
     const sg = ctx.createRadialGradient(sunX, sunY, 4, sunX, sunY, 120);
-    sg.addColorStop(0, `rgba(255,244,214,${0.95 - f.night})`);
+    sg.addColorStop(0, gh > 0.3 ? `rgba(255,214,140,${0.95 - f.night})` : `rgba(255,244,214,${0.95 - f.night})`);
     sg.addColorStop(1, 'rgba(255,244,214,0)');
     ctx.fillStyle = sg; ctx.beginPath(); ctx.arc(sunX, sunY, 120, 0, 7); ctx.fill();
   }
@@ -56,7 +113,7 @@ export function drawTerrain(ctx, cam, terrain, W, H, dayTime = 0.25) {
   const f = dayFactors(dayTime);
   const rows = 56, cols = 34;
   const horizon = H * 0.42;
-  const lightK = 0.32 + f.day * 0.68; // darken at night
+  const lightK = 0.32 + f.day * 0.68 + f.golden * 0.35; // golden hour keeps the world lit warm
   ctx.save();
   for (let r = rows; r >= 1; r--) {
     const depth = CFG.VIEW_DIST * Math.pow(r / rows, 2.0);
@@ -68,14 +125,25 @@ export function drawTerrain(ctx, cam, terrain, W, H, dayTime = 0.25) {
       const wz = cam.z + Math.cos(ang) * spread;
       const h = terrain.height(wx, wz);
       const hL = terrain.height(wx - 30, wz);
+      const hR = terrain.height(wx + 30, wz);
       const slope = Math.abs(h - hL);
       const [cr, cg, cb] = terrain.colorAt(h, slope);
       const fog = Math.min(1, depth / CFG.VIEW_DIST * 1.1);
-      const fadeK = 1 - fog * 0.72;      // shade by slope: sunlit west faces brighter, gives ridges volume
+      const fadeK = 1 - fog * 0.72;
+      // faceted warm/cool shading by sun angle: sun rides screen-right at golden hour,
+      // so westward-rising faces go cool shadow, eastward-rising faces warm-lit
+      const face = (hR - hL) / 60;             // -1 steep toward sun ... +1 away
+      const ghT = 0.32 + f.golden * 0.9 + f.dusk * 0.4;   // golden-hour warmth strength
+      const warm = Math.max(0, -face) * ghT;   // sunlit face → warm
+      const cool = Math.max(0, face) * (0.35 + ghT * 0.5); // shaded face → cool blue
+      let R = cr * (1 + warm * 0.55) - cool * 34;
+      let G = cg * (1 + warm * 0.18) - cool * 18;
+      let B = cb * (1 - warm * 0.22) + cool * 30;
       const shadeK = 1 - Math.min(0.28, slope / 900);
-      const lit = (cr * fadeK * shadeK * lightK + 170 * fog * (0.25 + f.day * 0.75));
-      const litG = (cg * fadeK * shadeK * lightK + 195 * fog * (0.25 + f.day * 0.75));
-      const litB = (cb * fadeK * shadeK * lightK + 215 * fog * (0.35 + f.day * 0.65));
+      const sunK = shadeK * lightK;
+      const lit = (Math.max(0, R) * fadeK * sunK + 170 * fog * (0.25 + f.day * 0.75));
+      const litG = (Math.max(0, G) * fadeK * sunK + 195 * fog * (0.25 + f.day * 0.75));
+      const litB = (Math.max(0, B) * fadeK * sunK + 215 * fog * (0.35 + f.day * 0.65));
       ctx.fillStyle = `rgb(${lit | 0},${litG | 0},${litB | 0})`;
       const cw = W / (cols * 2) * 1.4;
       const yTop = y0 - Math.max(0, h - 24) * (H / 860) * (420 / Math.max(depth, 380));
@@ -116,7 +184,61 @@ export function drawStorm(ctx, cam, terrain, W, H, tNow) {
       for (let i = 0; i < 6; i++) { lx += (Math.random() - 0.5) * rad * 0.4; ly += rad * 0.16; ctx.lineTo(lx, ly); }
       ctx.stroke();
     }
+    // rain streaks under the cell when the camera is close
+    if (d < st.r + 600) {
+      const k = Math.max(0, 1 - d / (st.r + 600)) * st.intensity;
+      ctx.strokeStyle = `rgba(180,200,225,${0.28 * k})`;
+      ctx.lineWidth = 1;
+      const n = Math.floor(46 * k);
+      for (let i = 0; i < n; i++) {
+        const rx = pr.x - rad + ((i * 761 + Math.floor(tNow * 90)) % (rad * 2));
+        const ry = pr.y - rad * 0.5 + ((i * 337 + Math.floor(tNow * 260)) % (rad * 1.4));
+        ctx.beginPath(); ctx.moveTo(rx, ry); ctx.lineTo(rx - 3, ry + 11); ctx.stroke();
+      }
+      // whole-screen lightning flash when very close
+      if (flick && d < st.r) {
+        ctx.fillStyle = 'rgba(210,225,255,0.18)';
+        ctx.fillRect(0, 0, W, H);
+      }
+    }
     ctx.restore();
+  }
+}
+
+// Terrain scatter: deterministic trees (lowland) and rocks (highland), drawn as tiny silhouettes.
+export function drawScatter(ctx, cam, terrain, W, H, dayTime = 0.25) {
+  const f = dayFactors(dayTime);
+  const horizon = H * 0.42;
+  for (let r = 26; r >= 8; r--) {
+    const depth = CFG.VIEW_DIST * Math.pow(r / 56, 2.0);
+    const spread = depth * 1.05;
+    for (let c = -14; c <= 14; c++) {
+      // stable jitter from cell indices
+      const hsh = ((r * 73856093) ^ (c * 19349663)) >>> 0;
+      const jx = (hsh % 1000) / 1000 - 0.5, jz = ((hsh >>> 10) % 1000) / 1000 - 0.5;
+      const ang = cam.yaw + (c + jx) * 0.048;
+      const wx = cam.x + Math.sin(ang) * spread + jx * 60;
+      const wz = cam.z + Math.cos(ang) * spread + jz * 60;
+      const h = terrain.height(wx, wz);
+      if (h < 30 || h > 620) continue;
+      const kind = (hsh >>> 20) % 5; // 0-2 tree, 3-4 rock
+      if (h > 430 && kind < 3) continue; // trees stop above treeline
+      const y = horizon + (H - horizon) * Math.pow(1 - depth / CFG.VIEW_DIST, 1.5);
+      const size = Math.max(1, 90 / Math.max(depth, 200) * 8);
+      const sx = W / 2 + (c + jx) * (W / 68) * 1.4;
+      const sy = y - Math.max(0, h - 24) * (H / 860) * (420 / Math.max(depth, 380));
+      const dim = 0.55 + f.day * 0.45;
+      if (kind < 3) {
+        ctx.fillStyle = `rgba(${(40 * dim) | 0},${(70 * dim) | 0},${(36 * dim) | 0},0.85)`;
+        ctx.fillRect(sx, sy - size * 1.6, size * 0.35, size * 1.6);
+        ctx.beginPath(); ctx.arc(sx + size * 0.17, sy - size * 1.7, size * 0.42, 0, 7); ctx.fill();
+      } else {
+        ctx.fillStyle = `rgba(${(120 * dim) | 0},${(112 * dim) | 0},${(100 * dim) | 0},0.85)`;
+        ctx.beginPath();
+        ctx.moveTo(sx - size * 0.5, sy); ctx.lineTo(sx, sy - size * 0.7); ctx.lineTo(sx + size * 0.55, sy);
+        ctx.closePath(); ctx.fill();
+      }
+    }
   }
 }
 
@@ -158,15 +280,32 @@ export function drawRings(ctx, cam, mission, W, H) {
     const pr = project(cam, W, H, ring.x, ring.y, ring.z);
     if (pr) {
       const rr = Math.max(3, ring.r * pr.scale * 0.55);
+      // additive glow halo behind the ring
+      ctx.save();
+      ctx.globalCompositeOperation = 'lighter';
+      const halo = ctx.createRadialGradient(pr.x, pr.y, rr * 0.4, pr.x, pr.y, rr * 2.2);
+      halo.addColorStop(0, active ? 'rgba(255,190,70,0.35)' : 'rgba(255,170,50,0.12)');
+      halo.addColorStop(1, 'rgba(255,170,50,0)');
+      ctx.fillStyle = halo;
+      ctx.beginPath(); ctx.arc(pr.x, pr.y, rr * 2.2, 0, 7); ctx.fill();
+      ctx.restore();
       ctx.strokeStyle = active ? '#ffd257' : 'rgba(255,190,60,0.4)';
       ctx.lineWidth = active ? 4 : 2;
+      ctx.shadowColor = active ? '#ffb020' : 'transparent';
+      ctx.shadowBlur = active ? 14 : 0;
       ctx.beginPath(); ctx.arc(pr.x, pr.y, rr, 0, 7); ctx.stroke();
+      ctx.shadowBlur = 0;
       const n = 10;
       for (let i = 0; i < n; i += 2) {
         const a0 = (i / n) * Math.PI * 2, a1 = ((i + 1) / n) * Math.PI * 2;
         ctx.fillStyle = active ? '#ffcf5a' : 'rgba(255,190,60,0.45)';
         ctx.beginPath(); ctx.arc(pr.x, pr.y, rr, a0, a1); ctx.arc(pr.x, pr.y, rr * 0.72, a1, a0, true); ctx.closePath(); ctx.fill();
       }
+      // distance label under the ring gate
+      const d3 = Math.hypot(ring.x - cam.x, ring.y - (cam.y || 0), ring.z - cam.z);
+      ctx.fillStyle = active ? '#ffe9a8' : 'rgba(255,210,120,0.75)';
+      ctx.font = 'bold 11px ui-monospace, monospace';
+      ctx.fillText(`G-${String(mission.rings.indexOf(ring) + 1).padStart(2, '0')} ${Math.round(d3)}m`, pr.x - 34, pr.y + rr + 14);
     }
   }
 }
@@ -218,14 +357,34 @@ export function drawAircraft(ctx, cam, p, spec, W, H) {
     ctx.fillStyle = '#ff5a5a'; ctx.fillRect(-s * 0.95, s * 0.24, 2, 2);
     ctx.fillStyle = '#63ff7a'; ctx.fillRect(s * 0.92, s * 0.24, 2, 2);
   }
-  if (p.afterburner) {
-    ctx.fillStyle = 'rgba(255,170,80,0.75)';
-    ctx.beginPath(); ctx.moveTo(-s * 0.12, s * 0.75); ctx.lineTo(s * 0.12, s * 0.75); ctx.lineTo(0, s * 0.75 + s * 0.5); ctx.closePath(); ctx.fill();
+  if (p.afterburner || p.throttle > 0.72) {
+    // afterburner flame quad, scaled by throttle — additive glow
+    const burn = p.afterburner ? 1 : (p.throttle - 0.72) / 0.28;
+    const fl = s * (0.45 + burn * 0.85) * (0.9 + 0.18 * Math.sin(Date.now() / 33));
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    const fg = ctx.createLinearGradient(0, s * 0.72, 0, s * 0.72 + fl);
+    fg.addColorStop(0, 'rgba(255,246,210,0.95)');
+    fg.addColorStop(0.35, 'rgba(255,178,64,0.8)');
+    fg.addColorStop(1, 'rgba(255,90,30,0)');
+    ctx.fillStyle = fg;
+    ctx.beginPath();
+    ctx.moveTo(-s * 0.14, s * 0.72); ctx.lineTo(s * 0.14, s * 0.72);
+    ctx.lineTo(0, s * 0.72 + fl);
+    ctx.closePath(); ctx.fill();
+    ctx.restore();
   }
   ctx.restore();
-  if (p.smoke > 0.05) {
-    ctx.fillStyle = `rgba(60,60,64,${p.smoke * 0.5})`;
-    ctx.beginPath(); ctx.arc(pr.x, pr.y - s, s * 0.8, 0, 7); ctx.fill();
+  // engine smoke / contrail particle trail: drifts behind and expands
+  if (p.smoke > 0.05 || (p.throttle > 0.85 && !p.onGround)) {
+    const dense = p.smoke > 0.05 ? p.smoke : 0.25;
+    for (let i = 0; i < 5; i++) {
+      const tt = (Date.now() / 90 + i * 3.1) % 5;
+      const px = pr.x + Math.sin(p.roll) * (tt - 2) * s * 0.7;
+      const py = pr.y - s * 0.75 + (tt - 2) * s * 0.45;
+      ctx.fillStyle = `rgba(${p.smoke > 0.05 ? '60,60,64' : '225,228,235'},${(p.smoke > 0.05 ? dense * 0.5 : 0.16) * (1 - tt / 5)})`;
+      ctx.beginPath(); ctx.arc(px, py, s * (0.35 + tt * 0.16), 0, 7); ctx.fill();
+    }
   }
 }
 

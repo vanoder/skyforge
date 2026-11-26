@@ -15,12 +15,21 @@ export function newPlane(spec, pos, headingDeg) {
 
 export function stepFlight(p, spec, ctl, terrain, dt, tNow) {
   const A = spec.agility;
+  // fly-by-wire input filtering: smoothed rate limiter on pitch/roll commands
+  p.fbwPitch = p.fbwPitch === undefined ? ctl.pitch : p.fbwPitch + (ctl.pitch - p.fbwPitch) * Math.min(1, dt * 9);
+  p.fbwRoll = p.fbwRoll === undefined ? ctl.roll : p.fbwRoll + (ctl.roll - p.fbwRoll) * Math.min(1, dt * 11);
+  // G-limiter: bleed off commanded pitch as predicted G approaches HARD_G (soft wall, not hard clamp)
+  const predictedG = 1 + Math.abs(p.fbwPitch) * CFG.PITCH_RATE * A * p.speed / 28;
+  let gTrim = 1;
+  if (predictedG > CFG.HARD_G * 0.92) gTrim = Math.max(0.12, (CFG.HARD_G * 0.92) / predictedG);
+  const ctlF = { pitch: p.fbwPitch * gTrim, roll: p.fbwRoll, yaw: ctl.yaw, throttle: ctl.throttle };
+  p.gLimiting = gTrim < 0.98;
   // controls: pitch [-1..1], roll, yaw, throttle delta
-  p.throttle = Math.max(0, Math.min(CFG.MAX_THROTTLE, p.throttle + ctl.throttle * CFG.THROTTLE_RATE * dt));
+  p.throttle = Math.max(0, Math.min(CFG.MAX_THROTTLE, p.throttle + ctlF.throttle * CFG.THROTTLE_RATE * dt));
   if (!p.onGround) {
-    p.pitch += ctl.pitch * CFG.PITCH_RATE * A * dt;
-    p.roll += ctl.roll * CFG.ROLL_RATE * A * dt;
-    p.heading += (ctl.yaw + Math.sin(p.roll) * 0.8) * CFG.YAW_RATE * A * dt;
+    p.pitch += ctlF.pitch * CFG.PITCH_RATE * A * dt;
+    p.roll += ctlF.roll * CFG.ROLL_RATE * A * dt;
+    p.heading += (ctlF.yaw + Math.sin(p.roll) * 0.8) * CFG.YAW_RATE * A * dt;
   } else {
     p.heading += ctl.yaw * CFG.YAW_RATE * 0.5 * A * dt;
   }
@@ -52,7 +61,7 @@ export function stepFlight(p, spec, ctl, terrain, dt, tNow) {
   const acc = thrust - Math.sin(p.pitch) * CFG.GRAVITY;
   p.speed += acc * dt;
   // drag rises with AoA proxy (|pitch - flightpath|) and G
-  const drag = CFG.DRAG * p.speed * p.speed * spec.drag + CFG.INDUCED_DRAG * Math.abs(ctl.pitch) * p.speed;
+  const drag = CFG.DRAG * p.speed * p.speed * spec.drag + CFG.INDUCED_DRAG * Math.abs(ctlF.pitch) * p.speed;
   p.speed -= drag * dt * (p.speed > 0 ? 1 : 0);
 
   // stall envelope
@@ -81,7 +90,7 @@ export function stepFlight(p, spec, ctl, terrain, dt, tNow) {
   p.pos.z += (p.vel.z + wind.z * (p.onGround ? 0 : 0.4)) * dt;
 
   // G estimate
-  p.g = 1 + Math.abs(ctl.pitch) * CFG.PITCH_RATE * A * p.speed / 28 + Math.abs(turbAcc) / 40;
+  p.g = 1 + Math.abs(ctlF.pitch) * CFG.PITCH_RATE * A * p.speed / 28 + Math.abs(turbAcc) / 40;
   p.maxGSeen = Math.max(p.maxGSeen || 0, p.g);
   if (p.g > CFG.HARD_G && !p.onGround) {
     p.damage += (p.g - CFG.HARD_G) * 9 * dt;

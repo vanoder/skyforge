@@ -19,12 +19,14 @@ export class Audio {
       this.ok = true;
     } catch { this.ok = false; }
   }
-  engine(throttle, speed) {
+  engine(throttle, speed, turb = 0) {
     if (!this.ok) return;
     const t = this.ctx.currentTime;
     this.engGain.gain.setTargetAtTime(0.05 + throttle * 0.14, t, 0.12);
-    this.oscA.frequency.setTargetAtTime(52 + throttle * 90 + speed * 0.3, t, 0.15);
-    this.oscB.frequency.setTargetAtTime(53.4 + throttle * 92 + speed * 0.31, t, 0.15);
+    // dynamic engine pitch: throttle-driven base with turbulence flutter
+    const flutter = turb * Math.sin(t * 21) * 8;
+    this.oscA.frequency.setTargetAtTime(52 + throttle * 90 + speed * 0.3 + flutter, t, 0.15);
+    this.oscB.frequency.setTargetAtTime(53.4 + throttle * 92 + speed * 0.31 + flutter * 1.3, t, 0.15);
     this.engFilter.frequency.setTargetAtTime(300 + throttle * 900, t, 0.2);
   }
   blip(freq = 660, dur = 0.09, type = 'square', vol = 0.25) {

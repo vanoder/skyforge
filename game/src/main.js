@@ -8,7 +8,7 @@ import { newPlane, stepFlight } from './flight.js';
 import { newMission, stepMission, missionOutcome } from './missions.js';
 import { newCamera, updateChase, updateCockpit } from './camera.js';
 import { spawnFoes, stepFoe, attachAllJink, makeBullet, makeMissile, makeFlare, inCone } from './combat.js';
-import { drawSky, drawTerrain, drawRunway, drawRings, drawAircraft, drawFoe, drawTracers, drawStorm, shade } from './render.js';
+import { drawSky, drawTerrain, drawRunway, drawRings, drawAircraft, drawFoe, drawTracers, drawStorm, drawClouds, drawScatter, shade } from './render.js';
 import { drawHUD, drawLadder } from './hud.js';
 import { drawMenu, drawHangar, drawMissions, drawResults, drawLivery, hangarHit, missionHit, liveryHit, SCREEN } from './screens.js';
 import { Audio } from './audio.js';
@@ -306,7 +306,7 @@ function update(dt) {
     for (const a of plane.alarms) { if (a.t > 0) { a.t -= dt; if (a.t > 0.55) audio.warn(); } }
     plane.alarms = plane.alarms.filter(a => a.t > 0);
     plane.smoke = Math.max(0, plane.smoke - dt * 0.4);
-    audio.engine(plane.throttle, plane.speed);
+    audio.engine(plane.throttle, plane.speed, terrain.wind(plane.pos.x, plane.pos.y, plane.pos.z, tNow).turb);
     if (cam.mode === 'cockpit') updateCockpit(cam, plane); else updateChase(cam, plane, dt);
     if (input.hit('KeyV')) cam.mode = cam.mode === 'chase' ? 'cockpit' : 'chase';
     if (input.hit('KeyL') || (mission.idx >= mission.rings.length && plane.onGround && plane.speed < 6)) finish(false);
@@ -324,7 +324,9 @@ function render() {
   else if (screen === SCREEN.MISSIONS) { drawMissions(ctx, W, H, save, hover, tNow); }
   else {
     drawSky(ctx, cam, W, H, dayTime);
+    drawClouds(ctx, W, H, dayTime, cam, tNow);
     drawTerrain(ctx, cam, terrain, W, H, dayTime);
+    drawScatter(ctx, cam, terrain, W, H, dayTime);
     drawRunway(ctx, cam, terrain, W, H);
     drawStorm(ctx, cam, terrain, W, H, tNow);
     drawRings(ctx, cam, mission, W, H);
@@ -368,6 +370,8 @@ function stage(which) {
   if (which === 'missions') { screen = SCREEN.MISSIONS; save.xp = 5200; tNow = 2.1; return; }
   screen = SCREEN.FLIGHT;
   spec = specOf(save);
+  // staged screenshots use golden-hour light unless the scene is explicitly night
+  if (which !== 'night') dayTime = 0.5;
   const rw = terrain.runway;
   plane = newPlane(spec, { x: rw.x, y: terrain.height(rw.x, rw.z) + 1.2, z: rw.z - rw.len / 2 + 40 }, 0);
   const whichMission = (which === 'combat' || which === 'dogfight') ? 'intercept' : 'patrol';
@@ -410,8 +414,7 @@ function stage(which) {
     mission.idx = 5; mission.time = 88.1;
     cam.mode = 'cockpit'; updateCockpit(cam, plane);
   } else if (which === 'night') {
-    dayTime = 0.72;
-    plane.pos = { x: 300, y: 380, z: 200 };
+    dayTime = 0.72;    plane.pos = { x: 300, y: 380, z: 200 };
     plane.heading = -0.4; plane.pitch = 0.04; plane.roll = 0.15;
     plane.speed = 88; plane.throttle = 0.8; plane.fuel = 58; plane.damage = 8; plane.onGround = false;
     mission.idx = 4; mission.time = 102.7; mission.score = 480;

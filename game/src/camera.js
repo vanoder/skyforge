@@ -6,12 +6,19 @@ export function newCamera() {
 // Chase rig: sits behind and above the aircraft, lags heading for a fluid feel.
 export function updateChase(cam, p, dt) {
   const back = 26, up = 7.5;
+  // G-reactive rig: shake + FOV widen under load (decays back)
+  const gLoad = Math.max(0, (p.g || 1) - 3.5);
+  cam.shake = Math.max(cam.shake * Math.pow(0.15, dt), gLoad * 0.045);
+  const targetFov = 1.15 + Math.min(0.22, gLoad * 0.03) + (p.throttle > 0.9 ? 0.05 : 0);
+  cam.fov = (cam.fov || 1.15) + (targetFov - (cam.fov || 1.15)) * Math.min(1, dt * 3);
+  const shakeX = cam.shake > 0.002 ? (Math.random() - 0.5) * cam.shake * 6 : 0;
+  const shakeY = cam.shake > 0.002 ? (Math.random() - 0.5) * cam.shake * 5 : 0;
   const tx = p.pos.x - Math.sin(p.heading) * back;
   const tz = p.pos.z - Math.cos(p.heading) * back;
   const ty = p.pos.y + up + Math.sin(p.pitch) * -6;
   const k = 1 - Math.pow(1e-7, dt); // taut chase: camera never loses the aircraft
-  cam.x = cam.x + (tx - cam.x) * k;
-  cam.y = cam.y + (ty - cam.y) * k;
+  cam.x = cam.x + (tx - cam.x) * k + shakeX;
+  cam.y = cam.y + (ty - cam.y) * k + shakeY;
   cam.z = cam.z + (tz - cam.z) * k;
   cam.yaw = p.heading;
   cam.pitch = p.pitch * 0.55 - 0.10; // bias down so nose+terrain stay framed

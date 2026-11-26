@@ -34,12 +34,16 @@ export class Terrain {
     const s = this.seed;
     const nx = x / 1400, nz = z / 1400;
     let h = 0;
-    h += noise2(nx, nz, s) * 260;
-    h += noise2(nx * 2.7 + 13, nz * 2.7, s ^ 0x9e37) * 90;
-    h += noise2(nx * 6.1, nz * 6.1 + 7, s ^ 0x51f3) * 26;
-    // ridge mask: mountains along west arc
+    h += noise2(nx, nz, s) * 360;
+    h += noise2(nx * 2.7 + 13, nz * 2.7, s ^ 0x9e37) * 150;
+    h += noise2(nx * 6.1, nz * 6.1 + 7, s ^ 0x51f3) * 44;
+    // ridge mask: dramatic mountains along west arc (diamond-square-style amplitude boost)
     const ridge = Math.max(0, 1 - Math.abs((x + 2600) / 2200));
-    h += ridge * noise2(nx * 1.4 + 40, nz * 1.4, s ^ 0xabc1) * 520;
+    h += ridge * (noise2(nx * 1.4 + 40, nz * 1.4, s ^ 0xabc1) * 1150
+                + noise2(nx * 3.2 + 8, nz * 3.2, s ^ 0x77c1) * 320);
+    // secondary lone massifs for silhouette drama
+    const massif = Math.max(0, 1 - Math.hypot((x - 2200) / 1500, (z + 1400) / 1500));
+    h += massif * noise2(nx * 1.1 + 91, nz * 1.1, s ^ 0x33d7) * 780;
     // islands: subtract sea basins
     const basin = noise2(nx * 0.9 - 30, nz * 0.9 + 22, s ^ 0x7d2f);
     if (basin < 0.34) h -= (0.34 - basin) * 900;
@@ -58,10 +62,11 @@ export class Terrain {
   colorAt(h, slope) {
     if (h < 2) return [26, 58, 92];        // sea
     if (h < 26) return [196, 178, 128];    // beach
-    if (h < 180) return [64, 122, 66];     // lowland
-    if (h < 420) return [88, 106, 60];     // highland
-    if (h < 620) return [112, 104, 92];    // rock
-    return [214, 218, 224];                // snow
+    if (h < 190) return [64, 122, 66];     // lowland
+    if (h < 430) return [88, 106, 60];     // highland
+    if (h < 640) return [112, 104, 92];    // rock
+    if (h < 780) return [150, 146, 138];   // high rock
+    return [226, 230, 238];                // snow caps above threshold
   }
   // Wind vector at a position: base breeze + storm swirl. Returns {x, z, turb}.
   wind(x, y, z, tNow) {
