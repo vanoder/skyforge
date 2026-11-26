@@ -1,0 +1,6 @@
+[
+  { "name": "1-dogfight.jpg", "query": "?shot=combat&seed=1" },
+  { "name": "2-nightops.jpg", "query": "?shot=night&seed=1" },
+  { "name": "3-landing.jpg", "query": "?shot=final&seed=1" },
+  { "name": "4-canyon.jpg", "query": "?shot=flight&seed=1" }
+]
